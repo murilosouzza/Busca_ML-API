@@ -42,6 +42,14 @@ else
 builder.Services.AddScoped<IBuscaService, BuscaService>();
 builder.Services.AddHostedService<HighlightsBackgroundService>();
 
+// CORS liberado pra desenvolvimento: permite o front rodando por outra origem
+// (ex.: Live Server em http://127.0.0.1:5500). Servido pelo próprio back (wwwroot),
+// é mesma origem e o CORS nem entra.
+const string CorsDevPolicy = "cors-dev";
+builder.Services.AddCors(options =>
+    options.AddPolicy(CorsDevPolicy, policy =>
+        policy.SetIsOriginAllowed(_ => true).AllowAnyHeader().AllowAnyMethod()));
+
 var app = builder.Build();
 
 // Cria o banco a partir do modelo se ele ainda não existir (dev).
@@ -49,6 +57,20 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.EnsureCreated();
+
+    // Banco vazio: dispara algumas buscas pra a home ("destaques") já ter o que mostrar.
+    if (!await db.Produtos.AnyAsync())
+    {
+        var busca = scope.ServiceProvider.GetRequiredService<IBuscaService>();
+        foreach (var termo in new[] { "celular", "fone", "notebook" })
+        {
+            try { await busca.BuscarAsync(termo); }
+            catch (Exception ex)
+            {
+                app.Logger.LogWarning(ex, "Seed inicial: falha ao buscar '{Termo}'.", termo);
+            }
+        }
+    }
 }
 
 // Configure the HTTP request pipeline.
@@ -58,6 +80,15 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+// Serve o front (wwwroot): abre home.html na raiz "/".
+var defaultFiles = new DefaultFilesOptions();
+defaultFiles.DefaultFileNames.Clear();
+defaultFiles.DefaultFileNames.Add("home.html");
+app.UseDefaultFiles(defaultFiles);
+app.UseStaticFiles();
+
+app.UseCors(CorsDevPolicy);
 
 app.UseAuthorization();
 

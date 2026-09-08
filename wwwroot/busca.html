@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+
+  <meta charset="UTF-8">
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  >
+  <title>BuscaML — Resultado da Busca</title>
+  <link
+    rel="stylesheet"
+    href="styles.css"
+  >
+</head>
+<body>
+
+<!-- CABEÇALHO DA PÁGINA DE RESULTADOS -->
+  <header class="app-header results-header">
+
+    <div class="header-inner header-search">
+
+      <!-- Botão para voltar para a Home -->
+      <a
+        class="back-circle"
+        href="home.html"
+        aria-label="Voltar"
+      >
+
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.4"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="15 18 9 12 15 6"></polyline>
+        </svg>
+
+      </a>
+
+      <!-- Barra de pesquisa -->
+      <form
+        class="search-form results-mode"
+        id="resultsSearchForm"
+        role="search"
+        action="busca.html"
+        method="get"
+      >
+
+        <button
+          type="submit"
+          class="search-submit"
+          aria-label="Buscar"
+        >
+
+          <svg
+            class="search-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.4"
+            stroke-linecap="round"
+          >
+            <circle
+              cx="11"
+              cy="11"
+              r="7"
+            ></circle>
+
+            <line
+              x1="21"
+              y1="21"
+              x2="16.5"
+              y2="16.5"
+            ></line>
+          </svg>
+
+        </button>
+
+
+        <input
+          type="text"
+          id="resultsSearchInput"
+          name="q"
+          placeholder="Os mais vendidos do Mercado Livre, pesquise aqui"
+          autocomplete="off"
+        >
+
+      </form>
+    </div>
+  </header>
+
+<!--  RESULTADOS DA BUSCA -->
+  <main class="view">
+
+    <p
+      class="result-count"
+      id="resultCount"
+    ></p>
+
+    <div
+      class="product-grid"
+      id="searchProductGrid"
+    ></div>
+
+  </main>
+
+<!-- NAVEGAÇÃO INFERIOR NO CELULAR -->
+  <nav
+    class="bottom-nav"
+    aria-label="Navegação principal"
+  >
+
+    <button
+      class="nav-item"
+      data-nav="inicio"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+      >
+        <path d="M3 11l9-7 9 7"></path>
+        <path d="M5 10v10h14V10"></path>
+      </svg>
+
+      Início
+    </button>
+
+    <button
+      class="nav-item"
+      data-nav="categorias"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+      >
+        <rect
+          x="3"
+          y="3"
+          width="7"
+          height="7"
+        ></rect>
+
+        <rect
+          x="14"
+          y="3"
+          width="7"
+          height="7"
+        ></rect>
+
+        <rect
+          x="3"
+          y="14"
+          width="7"
+          height="7"
+        ></rect>
+
+        <rect
+          x="14"
+          y="14"
+          width="7"
+          height="7"
+        ></rect>
+      </svg>
+
+      Categorias
+    </button>
+
+    <button
+      class="nav-item"
+      data-nav="favoritos"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+      >
+        <path
+          d="M12 21s-7-4.5-9.5-9A5.5 5.5 0 0112 5.5
+             5.5 5.5 0 0121.5 12c-2.5 4.5-9.5 9-9.5 9z"
+        ></path>
+      </svg>
+
+      Favoritos
+    </button>
+
+    <button
+      class="nav-item"
+      data-nav="perfil"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+      >
+        <circle
+          cx="12"
+          cy="8"
+          r="4"
+        ></circle>
+
+        <path
+          d="M4 21c0-4 4-6 8-6s8 2 8 6"
+        ></path>
+      </svg>
+
+      Perfil
+    </button>
+
+  </nav>
+
+  <script src="app.js"></script>
+
+</body>
+</html>
