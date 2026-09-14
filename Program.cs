@@ -42,9 +42,8 @@ else
 builder.Services.AddScoped<IBuscaService, BuscaService>();
 builder.Services.AddHostedService<HighlightsBackgroundService>();
 
-// CORS liberado pra desenvolvimento: permite o front rodando por outra origem
-// (ex.: Live Server em http://127.0.0.1:5500). Servido pelo próprio back (wwwroot),
-// é mesma origem e o CORS nem entra.
+// CORS liberado pra desenvolvimento: front e back são projetos separados, então
+// o front (ex.: Live Server em http://127.0.0.1:5500) chama essa API por outra origem.
 const string CorsDevPolicy = "cors-dev";
 builder.Services.AddCors(options =>
     options.AddPolicy(CorsDevPolicy, policy =>
@@ -80,13 +79,6 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-
-// Serve o front (wwwroot): abre home.html na raiz "/".
-var defaultFiles = new DefaultFilesOptions();
-defaultFiles.DefaultFileNames.Clear();
-defaultFiles.DefaultFileNames.Add("home.html");
-app.UseDefaultFiles(defaultFiles);
-app.UseStaticFiles();
 
 app.UseCors(CorsDevPolicy);
 
