@@ -23,9 +23,28 @@ public class BuscaService : IBuscaService
         _ttlCache = TimeSpan.FromMinutes(minutos);
     }
 
-    public async Task<BuscaResponseDto?> BuscarAsync(string termo, CancellationToken ct = default)
+    public Task<BuscaResponseDto?> BuscarAsync(string termo, CancellationToken ct = default)
     {
         var termoNormalizado = termo.Trim().ToLowerInvariant();
+        return ExecutarBuscaAsync(termoNormalizado, termo, c => _ml.BuscarProdutosAsync(termo, c), ct);
+    }
+
+    /// Mais vendidos de uma categoria do Mercado Livre (ex.: "MLB1648"), na ordem do ranking.
+    /// Usa o mesmo cache e o mesmo fallback da busca por texto; a chave de cache é "categoria:{id}".
+    public Task<BuscaResponseDto?> ObterMaisVendidosDaCategoriaAsync(string categoriaId, CancellationToken ct = default)
+    {
+        var id = categoriaId.Trim().ToUpperInvariant();
+        return ExecutarBuscaAsync($"categoria:{id}", id, c => _ml.BuscarMaisVendidosAsync(id, c), ct);
+    }
+
+    /// Fluxo comum: devolve do cache se ainda vale; senão chama o ML, cruza com os rankings,
+    /// salva tudo no banco e, se o ML falhar, cai na última busca salva.
+    private async Task<BuscaResponseDto?> ExecutarBuscaAsync(
+        string termoNormalizado,
+        string termo,
+        Func<CancellationToken, Task<MlSearchResponseDto>> buscarNoMl,
+        CancellationToken ct)
+    {
         var ultimaBusca = await _db.Buscas
             .Where(b => b.TermoPesquisado == termoNormalizado)
             .OrderByDescending(b => b.DataHora)
@@ -42,7 +61,7 @@ public class BuscaService : IBuscaService
 
         try
         {
-            var resultadoBusca = await _ml.BuscarProdutosAsync(termo, ct);
+            var resultadoBusca = await buscarNoMl(ct);
 
             var categoriasDistintas = resultadoBusca.Results
                 .Select(r => r.CategoryId)
@@ -66,11 +85,14 @@ public class BuscaService : IBuscaService
                 }
             }
 
+            // Um item é "mais vendido" se o client já trouxe a posição dele (veio de um /highlights)
+            // ou se ele aparece no ranking da própria categoria.
             var itensCruzados = resultadoBusca.Results.Select(item => new
             {
                 Item = item,
-                MaisVendido = posicaoRankingPorProduto.ContainsKey(item.Id),
-                PosicaoRanking = posicaoRankingPorProduto.TryGetValue(item.Id, out var pos) ? pos : null
+                MaisVendido = item.PosicaoRanking is not null || posicaoRankingPorProduto.ContainsKey(item.Id),
+                PosicaoRanking = item.PosicaoRanking
+                    ?? (posicaoRankingPorProduto.TryGetValue(item.Id, out var pos) ? pos : null)
             }).ToList();
 
             foreach (var entrada in itensCruzados)
@@ -200,6 +222,7 @@ public class BuscaService : IBuscaService
         var resultados = await _db.ResultadosBusca
             .Where(r => r.BuscaId == busca.Id)
             .Include(r => r.Produto).ThenInclude(p => p!.Categoria)
+            .OrderBy(r => r.Id) // mesma ordem em que os resultados foram salvos
             .ToListAsync(ct);
 
         return new BuscaResponseDto

@@ -29,6 +29,11 @@ public class MlItemDto
 
     [JsonPropertyName("shipping")]
     public MlShippingDto? Shipping { get; set; }
+
+    /// Posição no ranking de mais vendidos, quando o item veio de um /highlights.
+    /// Não é um campo do Mercado Livre: quem preenche é o nosso client. Null = não é mais vendido conhecido.
+    [JsonPropertyName("posicao_ranking")]
+    public int? PosicaoRanking { get; set; }
 }
 
 public class MlShippingDto

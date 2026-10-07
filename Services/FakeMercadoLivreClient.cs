@@ -96,6 +96,28 @@ public class FakeMercadoLivreClient : IMercadoLivreClient
         return Task.FromResult(new MlHighlightsResponseDto { Content = content });
     }
 
+    public async Task<MlSearchResponseDto> BuscarMaisVendidosAsync(string categoriaId, CancellationToken ct = default)
+    {
+        // Reaproveita os itens fixos da busca e fica só com os que estão no ranking da categoria.
+        var todos = await BuscarProdutosAsync("Mais vendido", ct);
+        var ranking = HighlightsPorCategoria.TryGetValue(categoriaId, out var lista)
+            ? lista
+            : new List<MlHighlightItemDto>();
+
+        var itens = new List<MlItemDto>();
+        foreach (var destaque in ranking)
+        {
+            var item = todos.Results.FirstOrDefault(i => i.Id == destaque.Id);
+            if (item is null)
+                continue;
+
+            item.PosicaoRanking = destaque.Position;
+            itens.Add(item);
+        }
+
+        return new MlSearchResponseDto { Results = itens };
+    }
+
     public Task<MlItemDetailDto?> ObterItemAsync(string idMl, CancellationToken ct = default)
     {
         MlItemDetailDto? item = idMl switch
