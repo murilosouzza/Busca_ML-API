@@ -1,7 +1,5 @@
-using System.Text.Json;
-using BuscaML.Api.Data;
-using BuscaML.Api.Models;
-using Microsoft.EntityFrameworkCore;
+using BuscaML.Api.Repositories.Interfaces;
+using BuscaML.Api.Services.Interfaces;
 
 namespace BuscaML.Api.Services;
 
@@ -19,7 +17,7 @@ public class HighlightsBackgroundService : BackgroundService
         _scopeFactory = scopeFactory;
         _logger = logger;
 
-        var horas = config.GetValue<double?>("Cache:IntervaloAtualizacaoHighlightsHoras") ?? 1.0;
+        double horas = config.GetValue<double?>("Cache:IntervaloAtualizacaoHighlightsHoras") ?? 1.0;
         _intervalo = TimeSpan.FromHours(horas);
     }
 
@@ -27,7 +25,7 @@ public class HighlightsBackgroundService : BackgroundService
     {
         _logger.LogInformation("HighlightsBackgroundService iniciado. Intervalo: {Intervalo}.", _intervalo);
 
-        using var timer = new PeriodicTimer(_intervalo);
+        using PeriodicTimer timer = new PeriodicTimer(_intervalo);
 
         do
         {
@@ -41,42 +39,19 @@ public class HighlightsBackgroundService : BackgroundService
     {
         try
         {
-            using var scope = _scopeFactory.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var ml = scope.ServiceProvider.GetRequiredService<IMercadoLivreClient>();
+            using IServiceScope scope = _scopeFactory.CreateScope();
+            IProdutoRepository produtoRepository = scope.ServiceProvider.GetRequiredService<IProdutoRepository>();
+            IHighlightService highlightService = scope.ServiceProvider.GetRequiredService<IHighlightService>();
 
-            var categorias = await db.Produtos
-                .Where(p => p.CategoriaId != null)
-                .Select(p => p.CategoriaId!)
-                .Distinct()
-                .ToListAsync(ct);
+            List<string> categorias = await produtoRepository.ListarCategoriaIdsAsync(ct);
 
             _logger.LogInformation("Atualizando highlights de {Qtd} categoria(s).", categorias.Count);
 
-            foreach (var categoriaId in categorias)
+            foreach (string categoriaId in categorias)
             {
                 try
                 {
-                    var highlights = await ml.ObterHighlightsAsync(categoriaId, ct);
-                    var json = JsonSerializer.SerializeToDocument(highlights);
-
-                    var cache = await db.HighlightsCache.FirstOrDefaultAsync(h => h.CategoriaId == categoriaId, ct);
-                    if (cache is null)
-                    {
-                        db.HighlightsCache.Add(new HighlightCache
-                        {
-                            CategoriaId = categoriaId,
-                            PayloadBruto = json,
-                            AtualizadoEm = DateTimeOffset.UtcNow
-                        });
-                    }
-                    else
-                    {
-                        cache.PayloadBruto = json;
-                        cache.AtualizadoEm = DateTimeOffset.UtcNow;
-                    }
-
-                    await db.SaveChangesAsync(ct);
+                    await highlightService.AtualizarAsync(categoriaId, ct);
                 }
                 catch (Exception ex)
                 {

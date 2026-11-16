@@ -1,5 +1,10 @@
+using BuscaML.Api.Clients;
+using BuscaML.Api.Clients.Interfaces;
 using BuscaML.Api.Data;
+using BuscaML.Api.Repositories;
+using BuscaML.Api.Repositories.Interfaces;
 using BuscaML.Api.Services;
+using BuscaML.Api.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -39,7 +44,15 @@ else
         .AddHttpMessageHandler<MercadoLivreAuthHandler>();
 }
 
+builder.Services.AddScoped<IBuscaRepository, BuscaRepository>();
+builder.Services.AddScoped<IProdutoRepository, ProdutoRepository>();
+builder.Services.AddScoped<ICategoriaRepository, CategoriaRepository>();
+builder.Services.AddScoped<IHighlightCacheRepository, HighlightCacheRepository>();
+
 builder.Services.AddScoped<IBuscaService, BuscaService>();
+builder.Services.AddScoped<IProdutoService, ProdutoService>();
+builder.Services.AddScoped<ICategoriaService, CategoriaService>();
+builder.Services.AddScoped<IHighlightService, HighlightService>();
 builder.Services.AddHostedService<HighlightsBackgroundService>();
 
 // CORS liberado pra desenvolvimento: front e back são projetos separados, então
@@ -52,18 +65,19 @@ builder.Services.AddCors(options =>
 var app = builder.Build();
 
 // Aplica as migrations pendentes (cria o banco/tabelas na primeira execução).
-using (var scope = app.Services.CreateScope())
+using (IServiceScope scope = app.Services.CreateScope())
 {
-    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    AppDbContext db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.Migrate();
 
     // Banco vazio: dispara algumas buscas pra a home ("destaques") já ter o que mostrar.
-    if (!await db.Produtos.AnyAsync())
+    IProdutoRepository produtoRepository = scope.ServiceProvider.GetRequiredService<IProdutoRepository>();
+    if (!await produtoRepository.ExisteAlgumAsync())
     {
-        var busca = scope.ServiceProvider.GetRequiredService<IBuscaService>();
-        foreach (var termo in new[] { "celular", "fone", "notebook" })
+        IBuscaService buscaService = scope.ServiceProvider.GetRequiredService<IBuscaService>();
+        foreach (string termo in new[] { "celular", "fone", "notebook" })
         {
-            try { await busca.BuscarAsync(termo); }
+            try { await buscaService.BuscarAsync(termo); }
             catch (Exception ex)
             {
                 app.Logger.LogWarning(ex, "Seed inicial: falha ao buscar '{Termo}'.", termo);

@@ -1,15 +1,12 @@
-using System.Text.Json;
+using BuscaML.Api.Data.Maps;
 using BuscaML.Api.Models;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.ChangeTracking;
 
 namespace BuscaML.Api.Data;
 
 public class AppDbContext : DbContext
 {
-    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
-    {
-    }
+    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
     public DbSet<Busca> Buscas => Set<Busca>();
     public DbSet<ResultadoBusca> ResultadosBusca => Set<ResultadoBusca>();
@@ -19,75 +16,12 @@ public class AppDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.ApplyConfiguration(new CategoriaMap());
+        modelBuilder.ApplyConfiguration(new ProdutoMap());
+        modelBuilder.ApplyConfiguration(new BuscaMap());
+        modelBuilder.ApplyConfiguration(new ResultadoBuscaMap());
+        modelBuilder.ApplyConfiguration(new HighlightCacheMap());
+
         base.OnModelCreating(modelBuilder);
-
-        // PostgreSQL guarda JsonDocument nativamente como jsonb. O comparer faz o EF
-        // considerar o JSON "alterado" só quando o conteúdo muda (e não a cada nova instância).
-        var jsonDocumentComparer = new ValueComparer<JsonDocument>(
-            (a, b) => a!.RootElement.GetRawText() == b!.RootElement.GetRawText(),
-            doc => doc.RootElement.GetRawText().GetHashCode(),
-            doc => JsonDocument.Parse(doc.RootElement.GetRawText(), default));
-
-        modelBuilder.Entity<Categoria>(e =>
-        {
-            e.ToTable("categorias");
-            e.HasKey(c => c.Id);
-            e.Property(c => c.Id).ValueGeneratedNever();
-        });
-
-        modelBuilder.Entity<Produto>(e =>
-        {
-            e.ToTable("produtos");
-            e.HasKey(p => p.IdMl);
-            e.Property(p => p.IdMl).ValueGeneratedNever();
-            e.Property(p => p.Preco).HasColumnType("numeric(18,2)");
-            e.Property(p => p.PayloadBruto)
-                .HasColumnType("jsonb")
-                .Metadata.SetValueComparer(jsonDocumentComparer);
-
-            e.HasOne(p => p.Categoria)
-                .WithMany(c => c.Produtos)
-                .HasForeignKey(p => p.CategoriaId)
-                .OnDelete(DeleteBehavior.SetNull);
-
-            e.HasIndex(p => p.MaisVendido);
-        });
-
-        modelBuilder.Entity<Busca>(e =>
-        {
-            e.ToTable("buscas");
-            e.HasKey(b => b.Id);
-            e.HasIndex(b => new { b.TermoPesquisado, b.DataHora });
-        });
-
-        modelBuilder.Entity<ResultadoBusca>(e =>
-        {
-            e.ToTable("resultados_busca");
-            e.HasKey(r => r.Id);
-            e.Property(r => r.PrecoEncontrado).HasColumnType("numeric(18,2)");
-
-            e.HasOne(r => r.Busca)
-                .WithMany(b => b.Resultados)
-                .HasForeignKey(r => r.BuscaId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            e.HasOne(r => r.Produto)
-                .WithMany()
-                .HasForeignKey(r => r.ProdutoIdMl)
-                .HasPrincipalKey(p => p.IdMl)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            e.HasIndex(r => r.BuscaId);
-        });
-
-        modelBuilder.Entity<HighlightCache>(e =>
-        {
-            e.ToTable("highlights_cache");
-            e.HasKey(h => h.Id);
-            e.HasIndex(h => h.CategoriaId).IsUnique();
-            e.Property(h => h.PayloadBruto)
-                .HasColumnType("jsonb")
-                .Metadata.SetValueComparer(jsonDocumentComparer);
-        });
     }
 }

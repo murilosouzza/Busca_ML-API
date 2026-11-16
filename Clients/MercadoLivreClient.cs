@@ -1,9 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
+using BuscaML.Api.Clients.Interfaces;
 using BuscaML.Api.DTOs;
 
-namespace BuscaML.Api.Services;
+namespace BuscaML.Api.Clients;
 
 /// <summary>
 /// Cliente da API oficial do Mercado Livre.

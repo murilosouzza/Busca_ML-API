@@ -1,6 +1,6 @@
 using BuscaML.Api.DTOs;
 
-namespace BuscaML.Api.Services;
+namespace BuscaML.Api.Clients.Interfaces;
 
 public interface IMercadoLivreClient
 {

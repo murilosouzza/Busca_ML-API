@@ -1,6 +1,7 @@
+using BuscaML.Api.Clients.Interfaces;
 using BuscaML.Api.DTOs;
 
-namespace BuscaML.Api.Services;
+namespace BuscaML.Api.Clients;
 
 /// <summary>
 /// Implementação de <see cref="IMercadoLivreClient"/> com dados fixos, para desenvolvimento e

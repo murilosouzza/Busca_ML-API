@@ -1,20 +1,31 @@
 # BuscaML — API
 
-Backend do BuscaML: busca produtos e os mais vendidos do Mercado Livre, guarda tudo em cache num banco SQLite e entrega para o [front](https://github.com/murilosouzza/BuscaML-Front).
+Backend do BuscaML: busca produtos e os mais vendidos do Mercado Livre, guarda tudo em cache num banco PostgreSQL e entrega para o [front](https://github.com/murilosouzza/BuscaML-Front).
 
 Feito em C# com ASP.NET Core (.NET 10) e Entity Framework Core.
 
 ## Como rodar
 
-Pré-requisito: [.NET SDK 10](https://dotnet.microsoft.com/download).
+Pré-requisitos: [.NET SDK 10](https://dotnet.microsoft.com/download) e [PostgreSQL](https://www.postgresql.org/download/) rodando em `localhost:5432`.
 
 ```bash
 git clone https://github.com/murilosouzza/Busca_ML-API.git
 cd Busca_ML-API
+```
+
+Guarde a senha do seu PostgreSQL nos segredos do usuário (ela **não vai pro Git**; troque `SUA_SENHA`):
+
+```bash
+dotnet user-secrets set "ConnectionStrings:Default" "Host=localhost;Port=5432;Database=buscaml;Username=postgres;Password=SUA_SENHA"
+```
+
+E rode:
+
+```bash
 dotnet run
 ```
 
-A API sobe em `http://localhost:5102`. O banco (`buscaml.db`) é criado sozinho na primeira execução.
+A API sobe em `http://localhost:5102`. O banco `buscaml` e as tabelas são criados sozinhos na primeira execução (migrations).
 
 Sem nenhuma configuração, o projeto roda com a **API fake**: quatro produtos fixos, sem depender de internet nem de credencial. Serve para desenvolver o front e testar o fluxo.
 
@@ -44,7 +55,7 @@ dotnet user-secrets set "MercadoLivre:ClientSecret" "COLE_O_CLIENT_SECRET"
 dotnet user-secrets set "MercadoLivre:UseFake" "false"
 ```
 
-Depois apague o `buscaml.db` (para limpar os produtos fake do cache) e rode de novo. No log deve aparecer `Novo token do Mercado Livre obtido`.
+Depois limpe os produtos fake do cache (veja *Problemas comuns*) e rode de novo. No log deve aparecer `Novo token do Mercado Livre obtido`.
 
 Para voltar à API fake, troque `UseFake` para `true`.
 
@@ -58,6 +69,8 @@ Para voltar à API fake, troque `UseFake` para `true`.
 | GET | `/api/categorias/{id}/mais-vendidos` | Ranking de mais vendidos de uma categoria do Mercado Livre (ex.: `MLB1648`) |
 | GET | `/api/produtos/destaques?quantidade=20` | Mais vendidos já salvos no banco (usado na home) |
 | GET | `/api/produtos/{id}` | Um produto pelo id (ex.: `MLB70040749`) |
+
+Erros: `400` (falta o `termo`) e `404` (nada encontrado) devolvem só a mensagem, em texto.
 
 Todos devolvem produtos no mesmo formato, que é o contrato com o front:
 
@@ -96,7 +109,7 @@ Todos devolvem produtos no mesmo formato, que é o contrato com o front:
 
 Produto de catálogo sem anúncio ativo não tem preço, então é descartado.
 
-**Cache.** Cada busca é salva no SQLite. Repetir o mesmo termo (ou a mesma categoria) dentro de 30 minutos responde direto do banco, sem chamar o Mercado Livre. O tempo é configurável em `Cache:TtlMinutosBusca`.
+**Cache.** Cada busca é salva no PostgreSQL. Repetir o mesmo termo (ou a mesma categoria) dentro de 30 minutos responde direto do banco, sem chamar o Mercado Livre. O tempo é configurável em `Cache:TtlMinutosBusca`.
 
 **Resiliência.** Se o Mercado Livre falhar ou demorar, a API devolve a última busca salva para aquele termo, mesmo vencida. Só responde 404 se nunca houve resultado salvo.
 
@@ -107,29 +120,43 @@ Produto de catálogo sem anúncio ativo não tem preço, então é descartado.
 ## Estrutura
 
 ```
-Program.cs                              monta tudo: banco, clients, CORS, carga inicial
-Controllers/
+Program.cs                              monta tudo: banco, clients, injeção de dependência, CORS, carga inicial
+Controllers/                            rotas HTTP (traduzem exceções em 400/404)
   BuscaController.cs                    GET /api/buscar
   CategoriasController.cs               GET /api/categorias/{id}/mais-vendidos
   ProdutosController.cs                 GET /api/produtos/destaques e /api/produtos/{id}
-Services/
-  IMercadoLivreClient.cs                contrato de acesso ao Mercado Livre
+Services/                               regras de negócio
+  BuscaService.cs                       cache, ranking, fallback
+  ProdutoService.cs                     detalhe de produto e destaques
+  CategoriaService.cs                   garante a categoria no banco
+  HighlightService.cs                   ranking de mais vendidos (com cache no banco)
+  HighlightsBackgroundService.cs        job que atualiza os mais vendidos
+  Interfaces/                           contratos dos serviços
+  Exceptions/                           NaoEncontradoException (404) e DadoInvalidoException (400)
+Repositories/                           acesso ao banco, um por entidade (+ Interfaces/)
+Clients/                                conversa com o Mercado Livre
   MercadoLivreClient.cs                 implementação real (API oficial)
   FakeMercadoLivreClient.cs             implementação fake (dados fixos)
   MercadoLivreAuthHandler.cs            gera o token e coloca em cada chamada
-  BuscaService.cs                       regra de negócio: cache, ranking, fallback
-  HighlightsBackgroundService.cs        job que atualiza os mais vendidos
-DTOs/
-  BuscaResponseDto.cs                   formato de resposta para o front
-  MercadoLivreDtos.cs                   formato interno dos dados do Mercado Livre
-Models/ e Data/AppDbContext.cs          entidades e mapeamento do SQLite
+  Interfaces/IMercadoLivreClient.cs     contrato de acesso ao Mercado Livre
+Data/                                   AppDbContext e Maps/ (um mapeamento por tabela)
+Models/                                 entidades do banco
+DTOs/                                   BuscaResponseDto (formato pro front) e MercadoLivreDtos (formato interno)
+Mappers/                                converte a entidade na resposta da API
+Migrations/ e Database/schema.sql       histórico e referência do banco PostgreSQL
+BuscaML_API.http                        requisições de exemplo pra testar a API
 docs/                                   documentos do projeto
 ```
 
 ## Problemas comuns
 
 - **A primeira subida demora.** Com o banco vazio, a API faz três buscas iniciais (celular, fone, notebook) para a home ter o que mostrar. Com a API real são mais de cem chamadas ao Mercado Livre, o que leva alguns segundos.
-- **Continuam aparecendo produtos "(fake)".** Eles estão no cache. Pare a API, apague `buscaml.db`, `buscaml.db-shm` e `buscaml.db-wal` e rode de novo.
+- **Continuam aparecendo produtos "(fake)".** Eles estão no cache do banco. Pare a API, limpe as tabelas (no `psql` ou no pgAdmin) e rode de novo:
+
+  ```sql
+  TRUNCATE TABLE resultados_busca, buscas, highlights_cache, produtos, categorias RESTART IDENTITY CASCADE;
+  ```
 - **Muitos 404 no log.** É esperado: são produtos de catálogo sem anúncio ativo, que a API descarta.
 - **`403` em `/sites/MLB/search`.** Esse endpoint é bloqueado pelo Mercado Livre e não é mais usado. Se aparecer, o `MercadoLivreClient.cs` está desatualizado: dê `git pull`.
 - **Falha ao obter token.** Confira o `ClientId` e o `ClientSecret` nos segredos do usuário.
+- **A API não sobe e reclama de senha ou conexão.** Defina o segredo `ConnectionStrings:Default` (veja *Como rodar*) e confira se o PostgreSQL está ligado.

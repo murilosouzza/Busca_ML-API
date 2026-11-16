@@ -2,7 +2,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 
-namespace BuscaML.Api.Services;
+namespace BuscaML.Api.Clients;
 
 /// <summary>
 /// Injeta o header Authorization: Bearer em toda chamada ao Mercado Livre.

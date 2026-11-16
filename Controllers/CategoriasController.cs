@@ -1,4 +1,6 @@
-using BuscaML.Api.Services;
+using BuscaML.Api.DTOs;
+using BuscaML.Api.Services.Exceptions;
+using BuscaML.Api.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
 namespace BuscaML.Api.Controllers;
@@ -17,19 +19,16 @@ public class CategoriasController : ControllerBase
     /// GET /api/categorias/MLB1648/mais-vendidos
     /// Devolve os mais vendidos da categoria do Mercado Livre, na ordem do ranking.
     [HttpGet("{id}/mais-vendidos")]
-    public async Task<IActionResult> ObterMaisVendidos(string id, CancellationToken ct)
+    public async Task<IActionResult> ListarMaisVendidos(string id, CancellationToken ct)
     {
-        var resultado = await _buscaService.ObterMaisVendidosDaCategoriaAsync(id, ct);
-
-        if (resultado is null)
+        try
         {
-            return NotFound(new
-            {
-                erro = "Não foi possível buscar os mais vendidos dessa categoria e não existe nenhum resultado salvo.",
-                id
-            });
+            BuscaResponseDto resultado = await _buscaService.ObterMaisVendidosDaCategoriaAsync(id, ct);
+            return Ok(resultado);
         }
-
-        return Ok(resultado);
+        catch (NaoEncontradoException ex)
+        {
+            return NotFound(ex.Message);
+        }
     }
 }

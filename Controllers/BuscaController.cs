@@ -1,4 +1,6 @@
-using BuscaML.Api.Services;
+using BuscaML.Api.DTOs;
+using BuscaML.Api.Services.Exceptions;
+using BuscaML.Api.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
 namespace BuscaML.Api.Controllers;
@@ -17,22 +19,18 @@ public class BuscaController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> Buscar([FromQuery] string? termo, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(termo))
+        try
         {
-            return BadRequest(new { erro = "O parâmetro 'termo' é obrigatório." });
+            BuscaResponseDto resultado = await _buscaService.BuscarAsync(termo, ct);
+            return Ok(resultado);
         }
-
-        var resultado = await _buscaService.BuscarAsync(termo, ct);
-
-        if (resultado is null)
+        catch (DadoInvalidoException ex)
         {
-            return NotFound(new
-            {
-                erro = "Não foi possível buscar esse termo e não existe nenhum resultado salvo.",
-                termo
-            });
+            return BadRequest(ex.Message);
         }
-
-        return Ok(resultado);
+        catch (NaoEncontradoException ex)
+        {
+            return NotFound(ex.Message);
+        }
     }
 }

@@ -1,56 +1,95 @@
 using System.Text.Json;
-using BuscaML.Api.Data;
+using BuscaML.Api.Clients.Interfaces;
 using BuscaML.Api.DTOs;
+using BuscaML.Api.Mappers;
 using BuscaML.Api.Models;
-using Microsoft.EntityFrameworkCore;
+using BuscaML.Api.Repositories.Interfaces;
+using BuscaML.Api.Services.Exceptions;
+using BuscaML.Api.Services.Interfaces;
 
 namespace BuscaML.Api.Services;
 
 public class BuscaService : IBuscaService
 {
-    private readonly AppDbContext _db;
-    private readonly IMercadoLivreClient _ml;
+    private const string MensagemSemResultadoBusca =
+        "Não foi possível buscar esse termo e não existe nenhum resultado salvo.";
+
+    private const string MensagemSemResultadoCategoria =
+        "Não foi possível buscar os mais vendidos dessa categoria e não existe nenhum resultado salvo.";
+
+    private readonly IBuscaRepository _buscaRepository;
+    private readonly IProdutoRepository _produtoRepository;
+    private readonly ICategoriaRepository _categoriaRepository;
+    private readonly ICategoriaService _categoriaService;
+    private readonly IHighlightService _highlightService;
+    private readonly IMercadoLivreClient _mercadoLivreClient;
     private readonly ILogger<BuscaService> _logger;
     private readonly TimeSpan _ttlCache;
 
-    public BuscaService(AppDbContext db, IMercadoLivreClient ml, IConfiguration config, ILogger<BuscaService> logger)
+    public BuscaService(
+        IBuscaRepository buscaRepository,
+        IProdutoRepository produtoRepository,
+        ICategoriaRepository categoriaRepository,
+        ICategoriaService categoriaService,
+        IHighlightService highlightService,
+        IMercadoLivreClient mercadoLivreClient,
+        IConfiguration config,
+        ILogger<BuscaService> logger)
     {
-        _db = db;
-        _ml = ml;
+        _buscaRepository = buscaRepository;
+        _produtoRepository = produtoRepository;
+        _categoriaRepository = categoriaRepository;
+        _categoriaService = categoriaService;
+        _highlightService = highlightService;
+        _mercadoLivreClient = mercadoLivreClient;
         _logger = logger;
 
-        var minutos = config.GetValue<int?>("Cache:TtlMinutosBusca") ?? 30;
+        int minutos = config.GetValue<int?>("Cache:TtlMinutosBusca") ?? 30;
         _ttlCache = TimeSpan.FromMinutes(minutos);
     }
 
-    public Task<BuscaResponseDto?> BuscarAsync(string termo, CancellationToken ct = default)
+    public async Task<BuscaResponseDto> BuscarAsync(string? termo, CancellationToken ct = default)
     {
-        var termoNormalizado = termo.Trim().ToLowerInvariant();
-        return ExecutarBuscaAsync(termoNormalizado, termo, c => _ml.BuscarProdutosAsync(termo, c), ct);
+        if (string.IsNullOrWhiteSpace(termo))
+            throw new DadoInvalidoException("O parâmetro 'termo' é obrigatório.");
+
+        string termoOriginal = termo;
+        string termoNormalizado = termoOriginal.Trim().ToLowerInvariant();
+
+        return await ExecutarBuscaAsync(
+            termoNormalizado,
+            termoOriginal,
+            c => _mercadoLivreClient.BuscarProdutosAsync(termoOriginal, c),
+            MensagemSemResultadoBusca,
+            ct);
     }
 
     /// Mais vendidos de uma categoria do Mercado Livre (ex.: "MLB1648"), na ordem do ranking.
     /// Usa o mesmo cache e o mesmo fallback da busca por texto; a chave de cache é "categoria:{id}".
-    public Task<BuscaResponseDto?> ObterMaisVendidosDaCategoriaAsync(string categoriaId, CancellationToken ct = default)
+    public async Task<BuscaResponseDto> ObterMaisVendidosDaCategoriaAsync(string categoriaId, CancellationToken ct = default)
     {
-        var id = categoriaId.Trim().ToUpperInvariant();
-        return ExecutarBuscaAsync($"categoria:{id}", id, c => _ml.BuscarMaisVendidosAsync(id, c), ct);
+        string id = categoriaId.Trim().ToUpperInvariant();
+
+        return await ExecutarBuscaAsync(
+            $"categoria:{id}",
+            id,
+            c => _mercadoLivreClient.BuscarMaisVendidosAsync(id, c),
+            MensagemSemResultadoCategoria,
+            ct);
     }
 
     /// Fluxo comum: devolve do cache se ainda vale; senão chama o ML, cruza com os rankings,
     /// salva tudo no banco e, se o ML falhar, cai na última busca salva.
-    private async Task<BuscaResponseDto?> ExecutarBuscaAsync(
+    private async Task<BuscaResponseDto> ExecutarBuscaAsync(
         string termoNormalizado,
         string termo,
         Func<CancellationToken, Task<MlSearchResponseDto>> buscarNoMl,
+        string mensagemSemResultado,
         CancellationToken ct)
     {
-        var ultimaBusca = await _db.Buscas
-            .Where(b => b.TermoPesquisado == termoNormalizado)
-            .OrderByDescending(b => b.DataHora)
-            .FirstOrDefaultAsync(ct);
+        Busca? ultimaBusca = await _buscaRepository.BuscarUltimaPorTermoAsync(termoNormalizado, ct);
 
-        var cacheValido = ultimaBusca is not null
+        bool cacheValido = ultimaBusca is not null
             && DateTimeOffset.UtcNow - ultimaBusca.DataHora < _ttlCache;
 
         if (cacheValido)
@@ -61,89 +100,7 @@ public class BuscaService : IBuscaService
 
         try
         {
-            var resultadoBusca = await buscarNoMl(ct);
-
-            var categoriasDistintas = resultadoBusca.Results
-                .Select(r => r.CategoryId)
-                .Where(id => !string.IsNullOrWhiteSpace(id))
-                .Distinct()
-                .ToList();
-
-            var posicaoRankingPorProduto = new Dictionary<string, int?>();
-
-            foreach (var categoriaId in categoriasDistintas)
-            {
-                try
-                {
-                    var highlights = await ObterHighlightsComCacheAsync(categoriaId!, ct);
-                    foreach (var item in highlights.Content)
-                        posicaoRankingPorProduto[item.Id] = item.Position;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Falha ao buscar /highlights da categoria {CategoriaId}.", categoriaId);
-                }
-            }
-
-            // Um item é "mais vendido" se o client já trouxe a posição dele (veio de um /highlights)
-            // ou se ele aparece no ranking da própria categoria.
-            var itensCruzados = resultadoBusca.Results.Select(item => new
-            {
-                Item = item,
-                MaisVendido = item.PosicaoRanking is not null || posicaoRankingPorProduto.ContainsKey(item.Id),
-                PosicaoRanking = item.PosicaoRanking
-                    ?? (posicaoRankingPorProduto.TryGetValue(item.Id, out var pos) ? pos : null)
-            }).ToList();
-
-            foreach (var entrada in itensCruzados)
-            {
-                await GarantirCategoriaAsync(entrada.Item.CategoryId, ct);
-                await GarantirProdutoAsync(entrada.Item, entrada.MaisVendido, entrada.PosicaoRanking, ct);
-            }
-
-            var novaBusca = new Busca
-            {
-                TermoPesquisado = termoNormalizado,
-                DataHora = DateTimeOffset.UtcNow
-            };
-            _db.Buscas.Add(novaBusca);
-            await _db.SaveChangesAsync(ct);
-
-            foreach (var entrada in itensCruzados)
-            {
-                _db.ResultadosBusca.Add(new ResultadoBusca
-                {
-                    BuscaId = novaBusca.Id,
-                    ProdutoIdMl = entrada.Item.Id,
-                    PrecoEncontrado = entrada.Item.Price,
-                    PosicaoRanking = entrada.PosicaoRanking,
-                    RegistradoEm = DateTimeOffset.UtcNow
-                });
-            }
-            await _db.SaveChangesAsync(ct);
-
-            var categoriasMap = await _db.Categorias.ToDictionaryAsync(c => c.Id, c => c.NomeMl, ct);
-
-            var resposta = new BuscaResponseDto
-            {
-                Termo = termo,
-                TotalResultados = itensCruzados.Count,
-                Resultados = itensCruzados.Select(x => new ProdutoResumoDto
-                {
-                    Id = x.Item.Id,
-                    Titulo = x.Item.Title,
-                    Preco = x.Item.Price,
-                    Categoria = x.Item.CategoryId is not null && categoriasMap.TryGetValue(x.Item.CategoryId, out var nome)
-                        ? nome
-                        : x.Item.CategoryId,
-                    MaisVendido = x.MaisVendido,
-                    FreteGratis = x.Item.Shipping?.FreeShipping ?? false,
-                    ImagemUrl = x.Item.Thumbnail,
-                    LinkMl = x.Item.Permalink
-                }).ToList()
-            };
-
-            return resposta;
+            return await BuscarNoMercadoLivreAsync(termoNormalizado, termo, buscarNoMl, ct);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
         {
@@ -152,168 +109,112 @@ public class BuscaService : IBuscaService
             if (ultimaBusca is not null)
                 return await MontarRespostaAPartirDeBuscaAsync(ultimaBusca, termo, ct);
 
-            return null;
+            throw new NaoEncontradoException(mensagemSemResultado);
         }
     }
 
-    public async Task<ProdutoResumoDto?> ObterProdutoPorIdAsync(string idMl, CancellationToken ct = default)
+    private async Task<BuscaResponseDto> BuscarNoMercadoLivreAsync(
+        string termoNormalizado,
+        string termo,
+        Func<CancellationToken, Task<MlSearchResponseDto>> buscarNoMl,
+        CancellationToken ct)
     {
-        var produto = await _db.Produtos
-            .Include(p => p.Categoria)
-            .FirstOrDefaultAsync(p => p.IdMl == idMl, ct);
+        MlSearchResponseDto resultadoBusca = await buscarNoMl(ct);
 
-        if (produto is not null)
-            return MapearProdutoParaDto(produto);
+        List<string?> categoriasDistintas = resultadoBusca.Results
+            .Select(r => r.CategoryId)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct()
+            .ToList();
 
-        try
+        Dictionary<string, int?> posicaoRankingPorProduto = new Dictionary<string, int?>();
+
+        foreach (string? categoriaId in categoriasDistintas)
         {
-            var itemMl = await _ml.ObterItemAsync(idMl, ct);
-            if (itemMl is null)
-                return null;
-
-            await GarantirCategoriaAsync(itemMl.CategoryId, ct);
-
-            var novoProduto = new Produto
+            try
             {
-                IdMl = itemMl.Id,
-                Titulo = itemMl.Title,
-                Preco = itemMl.Price,
-                CategoriaId = itemMl.CategoryId,
-                AtualizadoEm = DateTimeOffset.UtcNow,
-                FreteGratis = itemMl.Shipping?.FreeShipping ?? false,
-                ImagemUrl = itemMl.Thumbnail,
-                LinkMl = itemMl.Permalink,
-                MaisVendido = false,
-                PayloadBruto = JsonSerializer.SerializeToDocument(itemMl)
-            };
-
-            _db.Produtos.Add(novoProduto);
-            await _db.SaveChangesAsync(ct);
-
-            return MapearProdutoParaDto(novoProduto, itemMl.CategoryId);
+                MlHighlightsResponseDto highlights = await _highlightService.ObterComCacheAsync(categoriaId!, ct);
+                foreach (MlHighlightItemDto item in highlights.Content)
+                    posicaoRankingPorProduto[item.Id] = item.Position;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Falha ao buscar /highlights da categoria {CategoriaId}.", categoriaId);
+            }
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)
+
+        // Um item é "mais vendido" se o client já trouxe a posição dele (veio de um /highlights)
+        // ou se ele aparece no ranking da própria categoria.
+        var itensCruzados = resultadoBusca.Results.Select(item => new
         {
-            _logger.LogWarning(ex, "Falha ao buscar produto {IdMl} no Mercado Livre e ele não está em cache.", idMl);
-            return null;
-        }
-    }
+            Item = item,
+            MaisVendido = item.PosicaoRanking is not null || posicaoRankingPorProduto.ContainsKey(item.Id),
+            PosicaoRanking = item.PosicaoRanking
+                ?? (posicaoRankingPorProduto.TryGetValue(item.Id, out var pos) ? pos : null)
+        }).ToList();
 
-    public async Task<BuscaResponseDto> ObterDestaquesAsync(int quantidade, CancellationToken ct = default)
-    {
-        var produtos = await _db.Produtos
-            .Include(p => p.Categoria)
-            .Where(p => p.MaisVendido)
-            .OrderBy(p => p.PosicaoRanking ?? int.MaxValue)
-            .ThenByDescending(p => p.AtualizadoEm)
-            .Take(quantidade)
-            .ToListAsync(ct);
+        foreach (var entrada in itensCruzados)
+        {
+            await _categoriaService.GarantirAsync(entrada.Item.CategoryId, ct);
+            await GarantirProdutoAsync(entrada.Item, entrada.MaisVendido, entrada.PosicaoRanking, ct);
+        }
+
+        Busca novaBusca = new Busca
+        {
+            TermoPesquisado = termoNormalizado,
+            DataHora = DateTimeOffset.UtcNow
+        };
+        await _buscaRepository.AdicionarAsync(novaBusca, ct);
+
+        List<ResultadoBusca> resultados = itensCruzados.Select(entrada => new ResultadoBusca
+        {
+            BuscaId = novaBusca.Id,
+            ProdutoIdMl = entrada.Item.Id,
+            PrecoEncontrado = entrada.Item.Price,
+            PosicaoRanking = entrada.PosicaoRanking,
+            RegistradoEm = DateTimeOffset.UtcNow
+        }).ToList();
+        await _buscaRepository.AdicionarResultadosAsync(resultados, ct);
+
+        Dictionary<string, string> categoriasMap = await _categoriaRepository.ListarNomesPorIdAsync(ct);
 
         return new BuscaResponseDto
         {
-            Termo = "destaques",
-            TotalResultados = produtos.Count,
-            Resultados = produtos.Select(p => MapearProdutoParaDto(p)).ToList()
+            Termo = termo,
+            TotalResultados = itensCruzados.Count,
+            Resultados = itensCruzados.Select(x => new ProdutoResumoDto
+            {
+                Id = x.Item.Id,
+                Titulo = x.Item.Title,
+                Preco = x.Item.Price,
+                Categoria = x.Item.CategoryId is not null && categoriasMap.TryGetValue(x.Item.CategoryId, out string? nome)
+                    ? nome
+                    : x.Item.CategoryId,
+                MaisVendido = x.MaisVendido,
+                FreteGratis = x.Item.Shipping?.FreeShipping ?? false,
+                ImagemUrl = x.Item.Thumbnail,
+                LinkMl = x.Item.Permalink
+            }).ToList()
         };
     }
 
     private async Task<BuscaResponseDto> MontarRespostaAPartirDeBuscaAsync(Busca busca, string termoExibicao, CancellationToken ct)
     {
-        var resultados = await _db.ResultadosBusca
-            .Where(r => r.BuscaId == busca.Id)
-            .Include(r => r.Produto).ThenInclude(p => p!.Categoria)
-            .OrderBy(r => r.Id) // mesma ordem em que os resultados foram salvos
-            .ToListAsync(ct);
+        List<ResultadoBusca> resultados = await _buscaRepository.ListarResultadosAsync(busca.Id, ct);
 
         return new BuscaResponseDto
         {
             Termo = termoExibicao,
             TotalResultados = resultados.Count,
-            Resultados = resultados.Select(r => MapearProdutoParaDto(r.Produto)).ToList()
+            // O produto é obrigatório no resultado (chave estrangeira), por isso o "!".
+            Resultados = resultados.Select(r => ProdutoMapper.ParaResumo(r.Produto!)).ToList()
         };
     }
 
-    private static ProdutoResumoDto MapearProdutoParaDto(Produto produto, string? categoriaIdFallback = null)
+    private async Task GarantirProdutoAsync(MlItemDto item, bool maisVendido, int? posicaoRanking, CancellationToken ct)
     {
-        return new ProdutoResumoDto
-        {
-            Id = produto.IdMl,
-            Titulo = produto.Titulo,
-            Preco = produto.Preco,
-            Categoria = produto.Categoria?.NomeMl ?? categoriaIdFallback,
-            MaisVendido = produto.MaisVendido,
-            FreteGratis = produto.FreteGratis,
-            ImagemUrl = produto.ImagemUrl,
-            LinkMl = produto.LinkMl
-        };
-    }
-
-    private async Task<DTOs.MlHighlightsResponseDto> ObterHighlightsComCacheAsync(string categoriaId, CancellationToken ct)
-    {
-        var cache = await _db.HighlightsCache.AsNoTracking()
-            .FirstOrDefaultAsync(h => h.CategoriaId == categoriaId, ct);
-
-        if (cache is not null)
-        {
-            try
-            {
-                var doCache = JsonSerializer.Deserialize<DTOs.MlHighlightsResponseDto>(cache.PayloadBruto.RootElement);
-                if (doCache is not null)
-                    return doCache;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Falha ao ler highlights_cache da categoria {CategoriaId}; buscando ao vivo.", categoriaId);
-            }
-        }
-
-        var highlights = await _ml.ObterHighlightsAsync(categoriaId, ct);
-
-        _db.HighlightsCache.Add(new HighlightCache
-        {
-            CategoriaId = categoriaId,
-            PayloadBruto = JsonSerializer.SerializeToDocument(highlights),
-            AtualizadoEm = DateTimeOffset.UtcNow
-        });
-        await _db.SaveChangesAsync(ct);
-
-        return highlights;
-    }
-
-    private async Task GarantirCategoriaAsync(string? categoriaId, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(categoriaId))
-            return;
-
-        var existe = await _db.Categorias.AnyAsync(c => c.Id == categoriaId, ct);
-        if (existe)
-            return;
-
-        var nome = categoriaId;
-        try
-        {
-            var categoriaMl = await _ml.ObterCategoriaAsync(categoriaId, ct);
-            if (categoriaMl is not null && !string.IsNullOrWhiteSpace(categoriaMl.Name))
-                nome = categoriaMl.Name;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Falha ao buscar nome da categoria {CategoriaId} no ML; usando o ID como nome por enquanto.", categoriaId);
-        }
-
-        _db.Categorias.Add(new Categoria { Id = categoriaId, NomeMl = nome });
-        await _db.SaveChangesAsync(ct);
-    }
-
-    private async Task GarantirProdutoAsync(DTOs.MlItemDto item, bool maisVendido, int? posicaoRanking, CancellationToken ct)
-    {
-        var produto = await _db.Produtos.FirstOrDefaultAsync(p => p.IdMl == item.Id, ct);
-
-        if (produto is null)
-        {
-            produto = new Produto { IdMl = item.Id };
-            _db.Produtos.Add(produto);
-        }
+        Produto? existente = await _produtoRepository.BuscarPorIdMlAsync(item.Id, ct);
+        Produto produto = existente ?? new Produto { IdMl = item.Id };
 
         produto.Titulo = item.Title;
         produto.Preco = item.Price;
@@ -326,6 +227,9 @@ public class BuscaService : IBuscaService
         produto.MaisVendido = maisVendido;
         produto.PayloadBruto = JsonSerializer.SerializeToDocument(item);
 
-        await _db.SaveChangesAsync(ct);
+        if (existente is null)
+            await _produtoRepository.AdicionarAsync(produto, ct);
+        else
+            await _produtoRepository.AtualizarAsync(produto, ct);
     }
 }

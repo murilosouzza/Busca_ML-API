@@ -1,4 +1,6 @@
-using BuscaML.Api.Services;
+using BuscaML.Api.DTOs;
+using BuscaML.Api.Services.Exceptions;
+using BuscaML.Api.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
 namespace BuscaML.Api.Controllers;
@@ -7,31 +9,31 @@ namespace BuscaML.Api.Controllers;
 [Route("api/produtos")]
 public class ProdutosController : ControllerBase
 {
-    private readonly IBuscaService _buscaService;
+    private readonly IProdutoService _produtoService;
 
-    public ProdutosController(IBuscaService buscaService)
+    public ProdutosController(IProdutoService produtoService)
     {
-        _buscaService = buscaService;
+        _produtoService = produtoService;
     }
 
     [HttpGet("destaques")]
-    public async Task<IActionResult> ObterDestaques([FromQuery] int quantidade, CancellationToken ct)
+    public async Task<IActionResult> ListarDestaques([FromQuery] int quantidade, CancellationToken ct)
     {
-        var qtd = quantidade > 0 ? quantidade : 10;
-        var resultado = await _buscaService.ObterDestaquesAsync(qtd, ct);
+        BuscaResponseDto resultado = await _produtoService.ListarDestaquesAsync(quantidade, ct);
         return Ok(resultado);
     }
 
     [HttpGet("{id}")]
-    public async Task<IActionResult> ObterPorId(string id, CancellationToken ct)
+    public async Task<IActionResult> BuscarPorId(string id, CancellationToken ct)
     {
-        var produto = await _buscaService.ObterProdutoPorIdAsync(id, ct);
-
-        if (produto is null)
+        try
         {
-            return NotFound(new { erro = "Produto não encontrado.", id });
+            ProdutoResumoDto produto = await _produtoService.BuscarPorIdAsync(id, ct);
+            return Ok(produto);
         }
-
-        return Ok(produto);
+        catch (NaoEncontradoException ex)
+        {
+            return NotFound(ex.Message);
+        }
     }
 }

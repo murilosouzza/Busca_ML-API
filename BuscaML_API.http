@@ -1,6 +1,44 @@
-@BuscaML_API_HostAddress = http://localhost:5102
+# BuscaML_API.http - testes da API do BuscaML
+# Antes de rodar: PostgreSQL ligado e a API rodando no perfil http (F5).
+# Com o cliente fake (MercadoLivre:UseFake = true) os dados são sempre os mesmos 4 produtos
+# (ids MLB-FAKE-1 a MLB-FAKE-4). Com o cliente real, troque os ids pelos do Mercado Livre.
 
-GET {{BuscaML_API_HostAddress}}/weatherforecast/
-Accept: application/json
+@host = http://localhost:5102
 
-###
+# ----------------------------------------
+# Busca (1 endpoint)
+# ----------------------------------------
+
+### 1. GET /api/buscar?termo= - buscar produtos (200; a 2ª vez no mesmo termo vem do cache)
+GET {{host}}/api/buscar?termo=fone
+
+### 1b. GET /api/buscar sem termo (400, o termo é obrigatório)
+GET {{host}}/api/buscar
+
+### 1c. GET /api/buscar com termo só de espaços (400)
+GET {{host}}/api/buscar?termo=%20%20
+
+
+# ----------------------------------------
+# Produtos (2 endpoints)
+# ----------------------------------------
+
+### 2. GET /api/produtos/destaques - mais vendidos, na ordem do ranking (200)
+GET {{host}}/api/produtos/destaques
+
+### 2b. GET /api/produtos/destaques?quantidade= - limita a quantidade (200)
+GET {{host}}/api/produtos/destaques?quantidade=3
+
+### 3. GET /api/produtos/{id} - detalhe de um produto (200; vem do banco, senão do Mercado Livre)
+GET {{host}}/api/produtos/MLB-FAKE-2
+
+### 3b. GET /api/produtos/{id} - produto que não existe (404)
+GET {{host}}/api/produtos/NAO-EXISTE
+
+
+# ----------------------------------------
+# Categorias (1 endpoint)
+# ----------------------------------------
+
+### 4. GET /api/categorias/{id}/mais-vendidos - mais vendidos da categoria (200, ordem do ranking)
+GET {{host}}/api/categorias/MLB1000/mais-vendidos
