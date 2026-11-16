@@ -10,7 +10,7 @@ builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlite(builder.Configuration.GetConnectionString("Default")));
+    options.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
 
 var mlBaseUrl = builder.Configuration["MercadoLivre:BaseUrl"] ?? "https://api.mercadolibre.com";
 
@@ -51,11 +51,11 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// Cria o banco a partir do modelo se ele ainda não existir (dev).
+// Aplica as migrations pendentes (cria o banco/tabelas na primeira execução).
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.EnsureCreated();
+    db.Database.Migrate();
 
     // Banco vazio: dispara algumas buscas pra a home ("destaques") já ter o que mostrar.
     if (!await db.Produtos.AnyAsync())
